@@ -6,22 +6,31 @@ module uart_tx (
     output reg        tx,         // UART Transmit line
 
     // Transmit Interface
+    input wire [15:0] baud_divisor,
     input  wire [7:0]  tx_data,    // Data to transmit
     input  wire        tx_valid,   // Assert to send data
-    output reg        tx_ready   // Transmit ready for new data
+    output reg        tx_ready,   // Transmit ready for new data
+    input wire [1:0] i_parity_type
 );
-parameter IDLE =2'b00;
-parameter START_BIT=2'b01;
-parameter DATA_BITS=2'b10;
-parameter STOP_BIT=2'b11;
+parameter IDLE =3'b000;
+parameter START_BIT=3'b001;
+parameter DATA_BITS=3'b010;
+parameter PARITY_BIT=3'b011;
+parameter STOP_BIT=3'b100;
+parameter CLK_FREQ = 50000000;
 
 reg[7:0] tx_shift_reg;
-reg[1:0] ns,cs;
+reg[2:0] ns,cs;
 reg[9:0] baud_counter;
 wire baud_tick;
 reg [3:0] baud_tick_counter;
+wire parity;
 
-assign baud_tick=(baud_counter==50); // 50 MHZ clock
+assign parity = (i_parity_type == 2'b01)? ^tx_data : 
+                (i_parity_type == 2'b11)? ~^tx_data :
+                1'b1;
+
+assign baud_tick=(baud_counter== baud_divisor - 1); // 50 MHZ clock
 assign baud_tick_o=baud_tick;
 
 always @(posedge clk or negedge rst_n) begin // Handling Baud Counter
@@ -62,10 +71,23 @@ always @(*) begin   //next state handling
         end
         DATA_BITS:begin
             if(baud_tick && baud_tick_counter==4'b1000)begin
-                ns=STOP_BIT;
+                if(i_parity_type == 2'b00)begin
+                    ns=STOP_BIT;
+                end
+                else begin
+                    ns=PARITY_BIT;
+                end
             end
             else begin
                 ns=DATA_BITS;
+            end
+        end
+        PARITY_BIT:begin
+            if(baud_tick)begin
+                ns=STOP_BIT;
+            end
+            else begin
+                ns=PARITY_BIT;
             end
         end
         STOP_BIT: begin
@@ -94,11 +116,9 @@ always @(posedge clk or negedge rst_n) begin
             end
             START_BIT:begin
                 tx_ready<=0;
+                tx<=0;
                 if(tx_valid )begin
                     tx_shift_reg<=tx_data;
-                end
-                if(baud_tick)begin
-                    tx<=0;
                 end
             end
             DATA_BITS:begin
@@ -107,6 +127,9 @@ always @(posedge clk or negedge rst_n) begin
               tx_shift_reg<= tx_shift_reg >> 1;
               baud_tick_counter<=baud_tick_counter+1;
             end
+            end
+            PARITY_BIT:begin
+                    tx<=parity;
             end
             STOP_BIT:begin
                 tx<=1;
