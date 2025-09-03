@@ -4,33 +4,57 @@ module uart_rx (
     input  wire        rx,          // UART serial receive input
     output reg  [7:0]  rx_data,     // Received parallel data
     output reg         rx_valid,    // Data valid pulse
-    input  wire        rx_ready     // Receiver ready for new data
+    input  wire        rx_ready  ,   // Receiver ready for new data
+    input wire [15:0] baud_divisor ,
+    output reg        o_framing_error,
+    output reg        o_overrun_error,
+    input wire [1:0] i_parity_type , 
+    output reg o_parity_error
 );
 
 // Internal signals
-reg  [1:0] cs, ns;                  // State machine current/next state
+reg  [2:0] cs, ns;                  // State machine current/next state
 reg  [7:0] rx_shift_reg;             // Shift register for received data            
 reg        rx_sampled_bit;           // Sampled bit
 
-parameter IDLE =2'b00;
-parameter START_BIT=2'b01;
-parameter DATA_BITS=2'b10;
-parameter STOP_BIT=2'b11;
+parameter IDLE =3'b000;
+parameter START_BIT=3'b001;
+parameter DATA_BITS=3'b010;
+parameter PARITY_BIT=3'b011;
+parameter STOP_BIT=3'b100;
+parameter CLK_FREQ= 50000000;
 
+reg mid_bit_sample;
+reg recieved_parity;
 reg[9:0] baud_counter;
 wire baud_tick;
 reg [3:0] baud_tick_counter;
+wire parity;
 
-assign baud_tick=(baud_counter==50); // 50 MHZ clock with baud rate 115200
+assign baud_tick=(baud_counter== baud_divisor - 1); 
+assign parity = (i_parity_type == 2'b01)? ^rx_shift_reg:
+                (i_parity_type == 2'b10)? ~^rx_shift_reg:
+                1'b1;
 
 always @(posedge clk or negedge rst_n) begin // Handling Baud Counter
     if(!rst_n)
         baud_counter<=0;
-    else if(baud_tick)
+    else if(baud_tick )
         baud_counter<=0;
     else
         baud_counter<=baud_counter+1;
 end
+
+
+always @(posedge clk or negedge rst_n) begin
+    if(baud_counter == (baud_divisor >>1) -1)begin
+        mid_bit_sample<=1;
+    end
+    else begin
+        mid_bit_sample <=0;
+    end
+end
+
 
 always @(posedge clk or negedge rst_n) begin   // state transition
     if(!rst_n)begin
@@ -59,10 +83,25 @@ always @(*) begin   //next state handling
         end
         DATA_BITS:begin
             if(baud_tick && baud_tick_counter==4'b1000)begin
-                ns=STOP_BIT;
+                if(i_parity_type == 2'b00)begin
+                    ns=STOP_BIT;
+
+                end
+                else begin
+                    ns=PARITY_BIT;
+                end
+
             end
             else begin
                 ns=DATA_BITS;
+            end
+        end
+        PARITY_BIT:begin
+            if(baud_tick)begin
+                ns=STOP_BIT;
+            end
+            else begin
+                ns=PARITY_BIT;
             end
         end
         STOP_BIT: begin
@@ -81,6 +120,9 @@ always @(posedge clk or negedge rst_n) begin
         rx_valid<=0;
         baud_tick_counter <= 0;
         rx_shift_reg <= 0;
+        o_framing_error <= 0;
+        o_overrun_error <= 0;
+        o_parity_error <= 0;
     end
     else begin
         case (cs)
@@ -92,7 +134,7 @@ always @(posedge clk or negedge rst_n) begin
                 end
             end
             START_BIT:begin
-                if(baud_tick)begin
+                if(mid_bit_sample)begin
                    if(rx==1'b0)begin
                     baud_tick_counter<=0;
                    end
@@ -100,13 +142,29 @@ always @(posedge clk or negedge rst_n) begin
                 
             end
             DATA_BITS:begin
-                if(baud_tick)begin
+                if(mid_bit_sample)begin
               rx_shift_reg<={rx,rx_shift_reg[7:1]};
-              baud_tick_counter<=baud_tick_counter+1;
+                end
+                if(baud_tick)begin
+                    baud_tick_counter<=baud_tick_counter+1;
+                end
             end
+            PARITY_BIT:begin
+                    recieved_parity <= rx ;
             end
             STOP_BIT:begin
                 if(baud_tick)begin
+                    if (rx_valid) begin
+                        o_overrun_error <= 1'b1;
+                    end
+
+                    // Check for a framing error. Stop bit must be '1'.
+                    if (rx == 1'b0) begin
+                        o_framing_error <= 1'b1;
+                    end
+                    if(i_parity_type != 2'b00 && recieved_parity!= parity)begin
+                        o_parity_error <= 1'b1 ;
+                    end
                 rx_valid<=1;
                 rx_data<=rx_shift_reg;
                 end
