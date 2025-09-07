@@ -8,9 +8,9 @@ module uart_tx (
     // Transmit Interface
     input wire [15:0] baud_divisor,
     input  wire [7:0]  tx_data,    // Data to transmit
-    input  wire        tx_valid,   // Assert to send data
-    output reg        tx_ready,   // Transmit ready for new data
-    input wire [1:0] i_parity_type
+    input wire [1:0] i_parity_type , 
+    input wire i_fifo_empty , 
+    output reg o_fifo_rd_en
 );
 parameter IDLE =3'b000;
 parameter START_BIT=3'b001;
@@ -19,6 +19,7 @@ parameter PARITY_BIT=3'b011;
 parameter STOP_BIT=3'b100;
 parameter CLK_FREQ = 50000000;
 
+reg data_written;
 reg[7:0] tx_shift_reg;
 reg[2:0] ns,cs;
 reg[9:0] baud_counter;
@@ -56,7 +57,7 @@ end
 always @(*) begin   //next state handling
     case (cs)
         IDLE:begin
-            if(tx_valid && baud_tick  )begin
+            if(!i_fifo_empty )begin
                 ns=START_BIT;
             end
             else 
@@ -103,26 +104,34 @@ end
 always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
         tx<=1'b1;
-        tx_ready<=1'b1;
         baud_tick_counter<=0;
         tx_shift_reg<=8'b00000000;
     end
     else begin
         case (cs)
             IDLE:begin
-                tx_ready<=1; 
+                tx<=1;
                 baud_tick_counter<=0;
+                data_written<=0;
                 
             end
             START_BIT:begin
-                tx_ready<=0;
-                tx<=0;
-                if(tx_valid )begin
-                    tx_shift_reg<=tx_data;
+                if(!data_written)begin
+                o_fifo_rd_en<=1'b1;
                 end
+                else begin
+                    o_fifo_rd_en<=1'b0;
+                end
+                if(!i_fifo_empty)begin
+                tx<=0;
+                data_written<=1;
+                tx_shift_reg<=tx_data;
+                end
+                
             end
             DATA_BITS:begin
                 if(baud_tick)begin
+              o_fifo_rd_en<=1'b0;
               tx<=tx_shift_reg[0];
               tx_shift_reg<= tx_shift_reg >> 1;
               baud_tick_counter<=baud_tick_counter+1;
