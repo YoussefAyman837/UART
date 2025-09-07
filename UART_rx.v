@@ -3,13 +3,13 @@ module uart_rx (
     input  wire        rst_n,       // Active-low reset
     input  wire        rx,          // UART serial receive input
     output reg  [7:0]  rx_data,     // Received parallel data
-    output reg         rx_valid,    // Data valid pulse
-    input  wire        rx_ready  ,   // Receiver ready for new data
     input wire [15:0] baud_divisor ,
     output reg        o_framing_error,
     output reg        o_overrun_error,
     input wire [1:0] i_parity_type , 
-    output reg o_parity_error
+    output reg o_parity_error , 
+    output reg o_fifo_wr_en , 
+    input wire full
 );
 
 // Internal signals
@@ -31,10 +31,16 @@ wire baud_tick;
 reg [3:0] baud_tick_counter;
 wire parity;
 
+reg data_written;
+
+
 assign baud_tick=(baud_counter== baud_divisor - 1); 
 assign parity = (i_parity_type == 2'b01)? ^rx_shift_reg:
                 (i_parity_type == 2'b10)? ~^rx_shift_reg:
                 1'b1;
+
+
+
 
 always @(posedge clk or negedge rst_n) begin // Handling Baud Counter
     if(!rst_n)
@@ -68,7 +74,7 @@ end
 always @(*) begin   //next state handling
     case (cs)
         IDLE:begin
-            if(rx_ready  && baud_tick)begin
+            if(!full)begin
                 ns=START_BIT;
             end
             else 
@@ -117,18 +123,19 @@ end
 always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
         rx_data<=0;
-        rx_valid<=0;
         baud_tick_counter <= 0;
         rx_shift_reg <= 0;
         o_framing_error <= 0;
         o_overrun_error <= 0;
         o_parity_error <= 0;
+        o_fifo_wr_en <=0;
     end
     else begin
         case (cs)
             IDLE:begin
-                rx_valid<=0; 
                 baud_tick_counter<=0;
+                data_written<=0;
+
                 if(rx==0)begin
                     rx_shift_reg<=0;
                 end
@@ -153,10 +160,19 @@ always @(posedge clk or negedge rst_n) begin
                     recieved_parity <= rx ;
             end
             STOP_BIT:begin
-                if(baud_tick)begin
-                    if (rx_valid) begin
-                        o_overrun_error <= 1'b1;
+                if(!data_written)begin
+                    o_fifo_wr_en<=1;
+                    o_overrun_error <= full;
+                end
+                else begin
+                    o_fifo_wr_en<=0;
+                end
+               
+                if(!full)begin
+                        rx_data<=rx_shift_reg;
+                        data_written<=1;
                     end
+                if(baud_tick)begin
 
                     // Check for a framing error. Stop bit must be '1'.
                     if (rx == 1'b0) begin
@@ -165,8 +181,7 @@ always @(posedge clk or negedge rst_n) begin
                     if(i_parity_type != 2'b00 && recieved_parity!= parity)begin
                         o_parity_error <= 1'b1 ;
                     end
-                rx_valid<=1;
-                rx_data<=rx_shift_reg;
+                
                 end
             end
         endcase
