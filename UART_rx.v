@@ -52,7 +52,7 @@ always @(posedge clk or negedge rst_n) begin // Handling Baud Counter
 end
 
 
-always @(posedge clk or negedge rst_n) begin
+always @(posedge clk) begin
     if(baud_counter == (baud_divisor >>1) -1)begin
         mid_bit_sample<=1;
     end
@@ -74,7 +74,7 @@ end
 always @(*) begin   //next state handling
     case (cs)
         IDLE:begin
-            if(!full)begin
+            if(!rx)begin
                 ns=START_BIT;
             end
             else 
@@ -88,7 +88,7 @@ always @(*) begin   //next state handling
             ns=START_BIT;
         end
         DATA_BITS:begin
-            if(baud_tick && baud_tick_counter==4'b1000)begin
+            if(baud_tick && baud_tick_counter==4'b0111)begin
                 if(i_parity_type == 2'b00)begin
                     ns=STOP_BIT;
 
