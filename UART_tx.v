@@ -71,7 +71,7 @@ always @(*) begin   //next state handling
             ns=START_BIT;
         end
         DATA_BITS:begin
-            if(baud_tick && baud_tick_counter==4'b1000)begin
+            if(baud_tick && baud_tick_counter==4'b0111)begin
                 if(i_parity_type == 2'b00)begin
                     ns=STOP_BIT;
                 end
